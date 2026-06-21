@@ -6,6 +6,7 @@
 <title>מדבקות מחיר - מינימרקט</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jsbarcode/3.11.6/JsBarcode.all.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@zxing/library@0.21.3/umd/index.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@zxing/browser@0.1.5/umd/zxing-browser.min.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-database-compat.js"></script>
 <style>
@@ -568,9 +569,8 @@ function setMargin(val){
   renderSheet(); save();
 }
 
-// ---- סורק ברקוד דרך המצלמה ----
-// ---- סורק ברקוד דרך המצלמה (מנוע ZXing - חזק לברקודי מוצרים) ----
-let zxingReader=null, scanTargetId=null, videoTrack=null;
+// ---- סורק ברקוד דרך המצלמה (ZXing browser - אמין יותר) ----
+let scanControls=null, scanTargetId=null, videoTrack=null;
 let lastCode=null, lastCount=0;
 
 function openScanner(rowId){
@@ -583,7 +583,7 @@ function openScanner(rowId){
   hint.className="scan-hint"; hint.textContent="מבקש גישה למצלמה…";
   overlay.classList.add("open");
 
-  if(typeof ZXing==="undefined" || !ZXing.BrowserMultiFormatReader){
+  if(typeof ZXingBrowser==="undefined" || !ZXingBrowser.BrowserMultiFormatReader){
     hint.className="scan-hint err";
     hint.textContent="ספריית הסריקה לא נטענה. ודא חיבור לאינטרנט ורענן את הדף.";
     return;
@@ -591,24 +591,19 @@ function openScanner(rowId){
 
   // מגבילים לפורמטים של ברקודי מוצרים בלבד - מזרז ומדייק
   const hints=new Map();
-  const fmt=ZXing.BarcodeFormat;
-  hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS,[fmt.EAN_13,fmt.EAN_8,fmt.UPC_A,fmt.UPC_E]);
-  hints.set(ZXing.DecodeHintType.TRY_HARDER,true);
-
-  zxingReader=new ZXing.BrowserMultiFormatReader(hints, 150);
-
-  if(typeof zxingReader.decodeFromConstraints!=="function"){
-    hint.className="scan-hint err";
-    hint.textContent="גרסת ספריית הסריקה אינה תואמת. תגיד למפתח לעדכן.";
-    return;
+  if(typeof ZXing!=="undefined"){
+    const fmt=ZXing.BarcodeFormat;
+    hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS,[fmt.EAN_13,fmt.EAN_8,fmt.UPC_A,fmt.UPC_E]);
+    hints.set(ZXing.DecodeHintType.TRY_HARDER,true);
   }
 
+  const reader=new ZXingBrowser.BrowserMultiFormatReader(hints, {delayBetweenScanAttempts:100, delayBetweenScanSuccess:500});
+
   const video=document.getElementById("scanVideo");
-  // תכונות נדרשות לאייפון (Safari) - חובה כדי שהוידאו ינוגן inline
   video.setAttribute("playsinline","");
   video.setAttribute("autoplay","");
   video.muted=true;
-  // מצלמה אחורית ברזולוציה גבוהה. הפוקוס מוחל בנפרד אחרי הפתיחה (לא כאן, כי זה עלול להכשיל getUserMedia)
+
   const constraints={
     audio:false,
     video:{
@@ -618,19 +613,19 @@ function openScanner(rowId){
     }
   };
 
-  zxingReader.decodeFromConstraints(constraints, video, (result, err)=>{
+  reader.decodeFromConstraints(constraints, video, (result, err, controls)=>{
+    if(controls && !scanControls){
+      scanControls=controls;
+      hint.className="scan-hint"; hint.textContent="כוון את הברקוד למרכז המסגרת · לחיצה על המסך ממקדת מחדש";
+      const p=video.play(); if(p && p.catch) p.catch(()=>{});
+      setupTrackFeatures(video);
+    }
     if(result){
       const text=result.getText();
-      // דורשים שתי קריאות זהות רצופות כדי לאשר - מונע מספרים שגויים
+      // דורשים שתי קריאות זהות רצופות כדי לאשר
       if(text===lastCode){ lastCount++; } else { lastCode=text; lastCount=1; }
       if(lastCount>=2){ onScanSuccess(text); }
     }
-  }).then(()=>{
-    hint.className="scan-hint"; hint.textContent="כוון את הברקוד למרכז המסגרת · לחיצה על המסך ממקדת מחדש";
-    // באייפון לפעמים צריך להפעיל את הוידאו ידנית
-    const p=video.play(); if(p && p.catch) p.catch(()=>{});
-    // מנסים להפעיל פוקוס וכפתור פנס אם נתמכים
-    setupTrackFeatures(video);
   }).catch(err=>{
     hint.className="scan-hint err";
     hint.textContent="לא ניתן לפתוח את המצלמה: "+(err && err.name ? err.name : "שגיאה")+". באייפון יש לפתוח ב-Safari ולתת הרשאת מצלמה.";
@@ -692,7 +687,7 @@ function closeScanner(){
   torchOn=false; videoTrack=null;
   const torchBtn=document.getElementById("torchBtn");
   if(torchBtn){ torchBtn.style.display="none"; torchBtn.textContent="🔦 פנס"; }
-  try{ if(zxingReader){ zxingReader.reset(); zxingReader=null; } }catch(e){}
+  try{ if(scanControls){ scanControls.stop(); scanControls=null; } }catch(e){}
   const video=document.getElementById("scanVideo");
   if(video && video.srcObject){ video.srcObject.getTracks().forEach(t=>t.stop()); video.srcObject=null; }
 }
@@ -873,6 +868,7 @@ initFirebase();
 <title>מדבקות מחיר - מינימרקט</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jsbarcode/3.11.6/JsBarcode.all.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@zxing/library@0.21.3/umd/index.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@zxing/browser@0.1.5/umd/zxing-browser.min.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-database-compat.js"></script>
 <style>
@@ -1435,9 +1431,8 @@ function setMargin(val){
   renderSheet(); save();
 }
 
-// ---- סורק ברקוד דרך המצלמה ----
-// ---- סורק ברקוד דרך המצלמה (מנוע ZXing - חזק לברקודי מוצרים) ----
-let zxingReader=null, scanTargetId=null, videoTrack=null;
+// ---- סורק ברקוד דרך המצלמה (ZXing browser - אמין יותר) ----
+let scanControls=null, scanTargetId=null, videoTrack=null;
 let lastCode=null, lastCount=0;
 
 function openScanner(rowId){
@@ -1450,7 +1445,7 @@ function openScanner(rowId){
   hint.className="scan-hint"; hint.textContent="מבקש גישה למצלמה…";
   overlay.classList.add("open");
 
-  if(typeof ZXing==="undefined" || !ZXing.BrowserMultiFormatReader){
+  if(typeof ZXingBrowser==="undefined" || !ZXingBrowser.BrowserMultiFormatReader){
     hint.className="scan-hint err";
     hint.textContent="ספריית הסריקה לא נטענה. ודא חיבור לאינטרנט ורענן את הדף.";
     return;
@@ -1458,24 +1453,19 @@ function openScanner(rowId){
 
   // מגבילים לפורמטים של ברקודי מוצרים בלבד - מזרז ומדייק
   const hints=new Map();
-  const fmt=ZXing.BarcodeFormat;
-  hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS,[fmt.EAN_13,fmt.EAN_8,fmt.UPC_A,fmt.UPC_E]);
-  hints.set(ZXing.DecodeHintType.TRY_HARDER,true);
-
-  zxingReader=new ZXing.BrowserMultiFormatReader(hints, 150);
-
-  if(typeof zxingReader.decodeFromConstraints!=="function"){
-    hint.className="scan-hint err";
-    hint.textContent="גרסת ספריית הסריקה אינה תואמת. תגיד למפתח לעדכן.";
-    return;
+  if(typeof ZXing!=="undefined"){
+    const fmt=ZXing.BarcodeFormat;
+    hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS,[fmt.EAN_13,fmt.EAN_8,fmt.UPC_A,fmt.UPC_E]);
+    hints.set(ZXing.DecodeHintType.TRY_HARDER,true);
   }
 
+  const reader=new ZXingBrowser.BrowserMultiFormatReader(hints, {delayBetweenScanAttempts:100, delayBetweenScanSuccess:500});
+
   const video=document.getElementById("scanVideo");
-  // תכונות נדרשות לאייפון (Safari) - חובה כדי שהוידאו ינוגן inline
   video.setAttribute("playsinline","");
   video.setAttribute("autoplay","");
   video.muted=true;
-  // מצלמה אחורית ברזולוציה גבוהה. הפוקוס מוחל בנפרד אחרי הפתיחה (לא כאן, כי זה עלול להכשיל getUserMedia)
+
   const constraints={
     audio:false,
     video:{
@@ -1485,19 +1475,19 @@ function openScanner(rowId){
     }
   };
 
-  zxingReader.decodeFromConstraints(constraints, video, (result, err)=>{
+  reader.decodeFromConstraints(constraints, video, (result, err, controls)=>{
+    if(controls && !scanControls){
+      scanControls=controls;
+      hint.className="scan-hint"; hint.textContent="כוון את הברקוד למרכז המסגרת · לחיצה על המסך ממקדת מחדש";
+      const p=video.play(); if(p && p.catch) p.catch(()=>{});
+      setupTrackFeatures(video);
+    }
     if(result){
       const text=result.getText();
-      // דורשים שתי קריאות זהות רצופות כדי לאשר - מונע מספרים שגויים
+      // דורשים שתי קריאות זהות רצופות כדי לאשר
       if(text===lastCode){ lastCount++; } else { lastCode=text; lastCount=1; }
       if(lastCount>=2){ onScanSuccess(text); }
     }
-  }).then(()=>{
-    hint.className="scan-hint"; hint.textContent="כוון את הברקוד למרכז המסגרת · לחיצה על המסך ממקדת מחדש";
-    // באייפון לפעמים צריך להפעיל את הוידאו ידנית
-    const p=video.play(); if(p && p.catch) p.catch(()=>{});
-    // מנסים להפעיל פוקוס וכפתור פנס אם נתמכים
-    setupTrackFeatures(video);
   }).catch(err=>{
     hint.className="scan-hint err";
     hint.textContent="לא ניתן לפתוח את המצלמה: "+(err && err.name ? err.name : "שגיאה")+". באייפון יש לפתוח ב-Safari ולתת הרשאת מצלמה.";
@@ -1559,7 +1549,7 @@ function closeScanner(){
   torchOn=false; videoTrack=null;
   const torchBtn=document.getElementById("torchBtn");
   if(torchBtn){ torchBtn.style.display="none"; torchBtn.textContent="🔦 פנס"; }
-  try{ if(zxingReader){ zxingReader.reset(); zxingReader=null; } }catch(e){}
+  try{ if(scanControls){ scanControls.stop(); scanControls=null; } }catch(e){}
   const video=document.getElementById("scanVideo");
   if(video && video.srcObject){ video.srcObject.getTracks().forEach(t=>t.stop()); video.srcObject=null; }
 }
